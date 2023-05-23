@@ -8,6 +8,7 @@ import numpy as np
 import rospy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image
+from std_msgs.msg import Float64
 from std_srvs.srv import SetBool, SetBoolResponse
 from enum import Enum
 
@@ -20,7 +21,7 @@ FREQUENCY = 10                      # [Hz]
 
 # Topics and services
 CMD_VEL_TOPIC = 'cmd_vel'
-IMAGE_TOPIC = 'image'
+ERROR_TOPIC = 'error'
 ON_OFF_SERVICE = 'follow_object'
 
 class fsm(Enum):
@@ -43,8 +44,11 @@ class VisualServo:
 
         # set up publishers, subscribers, and services
         self._cmd_pub = rospy.Publisher(CMD_VEL_TOPIC, Twist, queue_size=1)
-        self._image_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self._error_callback, queue_size=1)
+        self._error_sub = rospy.Subscriber(ERROR_TOPIC, Image, self._error_callback, queue_size=1)
         self._on_off_srv = rospy.Service(ON_OFF_SERVICE, SetBool, self._on_off)
+
+        # sleep to register
+        rospy.sleep(2)
 
         # initialize PD controller
         self.pd = PD(gain[0], gain[1])
@@ -86,7 +90,7 @@ class VisualServo:
         """
         if not self._fsm == fsm.STOP:
             error = msg.data
-            time = msg.header.stamp.to_sec()
+            time = rospy.Time.now().to_sec()
             angular_v = self.pd.step(error, time)
             if angular_v >= 0:
                 self.angular_velocity = min(angular_v, self.max_angular_velocity)
