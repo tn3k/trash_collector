@@ -74,8 +74,8 @@ class ObjectDetection():
                         curr_pixel = toBeVisited.pop(0)
                         newRegion.append(curr_pixel)
 						# Checking if neighbors are of the correct color
-                        for y2 in range(max(0,curr_pixel[1]-1), min(height, curr_pixel[1]+1) + 1):
-                            for x2 in range(max(0,curr_pixel[0]-1), min(width, curr_pixel[0]+1) + 1):
+                        for y2 in range(max(0,curr_pixel[1]-1), min(height-1, curr_pixel[1]+1) + 1):
+                            for x2 in range(max(0,curr_pixel[0]-1), min(width-1, curr_pixel[0]+1) + 1):
                                 currentPixelColor = image[y2, x2]
                                 if ((x2,y2) not in visited and self.isSimilarColor(currentPixelColor)):
                                     visited.add((x2,y2))
