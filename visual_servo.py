@@ -6,8 +6,8 @@
 import numpy as np
 
 import rospy
+import yaml
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Image
 from std_msgs.msg import Float64
 from std_srvs.srv import SetBool, SetBoolResponse
 from enum import Enum
@@ -44,7 +44,7 @@ class VisualServo:
 
         # set up publishers, subscribers, and services
         self._cmd_pub = rospy.Publisher(CMD_VEL_TOPIC, Twist, queue_size=1)
-        self._error_sub = rospy.Subscriber(ERROR_TOPIC, Image, self._error_callback, queue_size=1)
+        self._error_sub = rospy.Subscriber(ERROR_TOPIC, Float64, self._error_callback, queue_size=1)
         self._on_off_srv = rospy.Service(ON_OFF_SERVICE, SetBool, self._on_off)
 
         # sleep to register
@@ -127,9 +127,12 @@ class VisualServo:
 
 def main():
     """Main function"""
+    # get gains from yaml file
+    with open('controller_gain.yml', 'r') as f:
+        gains = yaml.safe_load(f)
     # init node
     rospy.init_node('follow_object')
-    visual_servo = VisualServo()
+    visual_servo = VisualServo(gain=(gains['kp'], gains['kd']))
     # stop robot on shutdown
     rospy.on_shutdown(visual_servo.stop)
     # start node spinning
