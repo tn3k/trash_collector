@@ -32,7 +32,7 @@ class ObjectDetection():
         """Constructor."""
 
         # Setting up publishers/subscribers.
-        # Setting up subscriber receiving messages from the laser.
+        # Setting up subscriber receiving messages
         self._image_sub = rospy.Subscriber(CAMERA_COLOR_TOPIC, Image, self.image_callback, queue_size=1)
         self.error_pub = rospy.Publisher('error', Float64, queue_size=1)
         # Set up parameters for region determination
@@ -135,7 +135,7 @@ class ObjectDetection():
 def main():
     """Main function."""
     # 1st. initialization of node.
-    rospy.init_node("random_walk")
+    rospy.init_node("object_detection")
     # Sleep for a few seconds to wait for the registration.
     rospy.sleep(2)
     # Initialization of the class for the object detection.
