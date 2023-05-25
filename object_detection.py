@@ -166,7 +166,6 @@ def main():
     # Sleep for a few seconds to wait for the registration.
     rospy.sleep(2)
     # Initialization of the class for the object detection.
-    print("")
     object_detection = ObjectDetection()
     print("Node Initialized")
     print("Spinning...")
