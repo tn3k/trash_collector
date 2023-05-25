@@ -10,7 +10,6 @@ from cv_bridge import CvBridge
 import rospy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan, Image
-from std_msgs.msg import Float64
 from enum import Enum
 
 from pd_controller import PD
@@ -30,7 +29,7 @@ MAX_SCAN_ANGLE_RAD = +30.0 / 180 * np.pi
 MIN_THRESHOLD_DISTANCE = 0.6    # [m]
 
 # to determine if a position is within another radius
-MARKER_THRESHOLD = 0.5
+MARKER_THRESHOLD = 1
 
 # Topics and services
 CMD_VEL_TOPIC = 'cmd_vel'
@@ -194,11 +193,10 @@ class Marker:
                 if np.isnan(x):
                     return region
                 cam_p = np.array([self.calculate_depth(region), 0, 0, 1])
-                print("camera: {}".format(cam_p))
                 t, r = self.listener.lookupTransform('odom', 'base_link', rospy.Time(0))
                 o_T_c = tf.transformations.translation_matrix(t)
                 o_R_c = tf.transformations.quaternion_matrix(r)
-                o_H_c = o_R_c.dot(o_T_c)
+                o_H_c = o_T_c.dot(o_R_c)
                 odom_p = o_H_c.dot(np.transpose(cam_p))
                 # if position not close to one in marked then return
                 new = True
@@ -208,6 +206,7 @@ class Marker:
                     # if that difference is less than the threshold then it is not new
                     if np.linalg.norm(difference) < self.marker_threshold:
                         new = False
+                        break
                 # if this is a new point then return the region
                 if new:
                     return region
@@ -304,8 +303,21 @@ class Marker:
                     break
                 self.rate.sleep()
 
-    def mark_object(self):
-        # Mark the object here
+    def mark_object(self, depth):
+        # get the camera point and transform into odom
+        # simplification using the depth as the x-coordinate
+        cam_p = np.array([depth, 0, 0, 1])
+        t, r = self.listener.lookupTransform('odom', 'base_link', rospy.Time(0))
+        o_T_c = tf.transformations.translation_matrix(t)
+        o_R_c = tf.transformations.quaternion_matrix(r)
+        o_H_c = o_T_c.dot(o_R_c)
+        odom_p = o_H_c.dot(np.transpose(cam_p))
+        print("MARKED: {}".format(odom_p))
+        # append odom point to the marked list
+        self.marked.append(odom_p[0:2])
+
+    def turn_around(self):
+        # Then do a U turn
         duration = np.pi / self.max_angular_velocity
         start_time = rospy.get_rostime()
         while not rospy.is_shutdown():
@@ -332,6 +344,7 @@ class Marker:
                 if self.depth < self.depth_threshold:
                     self.stop()
                     self._fsm = fsm.MARKING
+                    self.mark_object(self.depth)
                 else:
                     self.calculate_controller_error(self.error)
 
@@ -343,7 +356,7 @@ class Marker:
             elif self._fsm == fsm.EXPLORING:
                 self.random_walk()
             elif self._fsm == fsm.MARKING:
-                self.mark_object()
+                self.turn_around()
             self.rate.sleep()
 
 def main():
