@@ -1,6 +1,6 @@
 #!/usr/env/bin python
 
-# Author: Kent Koehler
+# Author: Kent Koehler and Jack Desmond
 # Date: 5/21/2023
 
 import numpy as np
@@ -16,9 +16,9 @@ from pd_controller import PD
 
 # Constants related to robot (ROSBOT 2 for final project)
 LINEAR_VELOCITY = 0.1               # [m/s]
-ANGULAR_VELOCITY_MAX = np.pi/3      # [rad/s]
+ANGULAR_VELOCITY_MAX = np.pi/6      # [rad/s]
 FREQUENCY = 10                      # [Hz]
-DEPTH_THRESHOLD = 1              # [m]
+DEPTH_THRESHOLD = 0.6              # [m]
 
 # for PD controller
 GAIN = (0.01, 0.0005)
@@ -30,6 +30,9 @@ MIN_THRESHOLD_DISTANCE = 0.6    # [m]
 
 # to determine if a position is within another radius
 MARKER_THRESHOLD = 1
+
+# For returning the object
+RETURN_LOCATION = (0, 0)    # in odom frame
 
 # Topics and services
 CMD_VEL_TOPIC = 'cmd_vel'
@@ -198,18 +201,24 @@ class Marker:
                 o_R_c = tf.transformations.quaternion_matrix(r)
                 o_H_c = o_T_c.dot(o_R_c)
                 odom_p = o_H_c.dot(np.transpose(cam_p))
-                # if position not close to one in marked then return
-                new = True
-                for marker in self.marked:
-                    # find difference from marker
-                    difference = np.array([odom_p[1] - marker[1], odom_p[0] - marker[0]])
-                    # if that difference is less than the threshold then it is not new
-                    if np.linalg.norm(difference) < self.marker_threshold:
-                        new = False
-                        break
-                # if this is a new point then return the region
-                if new:
+                # if position not close to collection site
+                difference = np.array([odom_p[1] - RETURN_LOCATION[1], odom_p[0], RETURN_LOCATION[0]])
+                # if the region is outside of the collection site
+                if np.linalg.norm(difference) > self.marker_threshold:
                     return region
+################# FOR MARKING THE OBJECTS ######################################
+                # new = True
+                # for marker in self.marked:
+                #     # find difference from marker
+                #     difference = np.array([odom_p[1] - marker[1], odom_p[0] - marker[0]])
+                #     # if that difference is less than the threshold then it is not new
+                #     if np.linalg.norm(difference) < self.marker_threshold:
+                #         new = False
+                #         break
+                # # if this is a new point then return the region
+                # if new:
+                #     return region
+################################################################################
             # if none of the regions are new 
         return None
 
@@ -289,15 +298,17 @@ class Marker:
         if not self.close_obstacle:
             self.move(self.linear_velocity, 0)
         else:
-            target_yaw = (np.random.random() - 0.5 * 2 * 3 * np.pi/2)
+            target_yaw = (np.random.uniform(-np.pi, -np.pi/2.) 
+                          if np.random.random() > 0.5 else np.random.uniform(np.pi/2., np.pi))
             # set direction to ccw if yaw is positive and cw if negative
-            direction = 1 if target_yaw > 0 else -1
+            direction = np.sign(target_yaw)
             duration = abs(target_yaw) / self.max_angular_velocity   # duration of rotation
             start_time = rospy.get_rostime()                # get start time
             # loop that turns the robot
             while not rospy.is_shutdown():
                 self.move(0, direction * self.max_angular_velocity)
-                if rospy.get_rostime() - start_time >= rospy.Duration(duration) or self._fsm != fsm.EXPLORING:
+                self.error = self.calculate_pixel_error()
+                if rospy.get_rostime() - start_time >= rospy.Duration(duration) or not np.isnan(self.error):
                     self.close_obstacle = False
                     self.angular_velocity = 0
                     break
@@ -316,17 +327,6 @@ class Marker:
         # append odom point to the marked list
         self.marked.append(odom_p[0:2])
 
-    def turn_around(self):
-        # Then do a U turn
-        duration = np.pi / self.max_angular_velocity
-        start_time = rospy.get_rostime()
-        while not rospy.is_shutdown():
-            self.move(0, self.max_angular_velocity)
-            if rospy.get_rostime() - start_time >= rospy.Duration(duration):
-                self._fsm = fsm.EXPLORING
-                break
-            self.rate.sleep()
-
     def update_state(self):
         self.object = self.get_object()
         self.error = self.calculate_pixel_error()
@@ -344,9 +344,63 @@ class Marker:
                 if self.depth < self.depth_threshold:
                     self.stop()
                     self._fsm = fsm.MARKING
-                    self.mark_object(self.depth)
+                    # self.mark_object(self.depth)          # for marking the objects in the map
                 else:
                     self.calculate_controller_error(self.error)
+
+    def move_rel(self, distance):
+        duration = abs(distance) / self.linear_velocity
+        direction = np.sign(distance)
+        start_time = rospy.get_rostime()
+        while not rospy.is_shutdown():
+            self.move(direction * self.linear_velocity, 0)
+            if rospy.get_rostime() - start_time >= rospy.Duration(duration):
+                self.stop()
+                break
+            self.rate.sleep()
+
+    def rotate_rel(self, angle):
+        duration = abs(angle) / self.max_angular_velocity
+        print(duration)
+        direction = np.sign(angle)
+        print(direction)
+        start_time = rospy.get_rostime()
+        while not rospy.is_shutdown():
+            print(rospy.get_rostime())
+            self.move(0, direction * self.max_angular_velocity)
+            if rospy.get_rostime() - start_time >= rospy.Duration(duration):
+                self.stop()
+                break
+            self.rate.sleep()
+
+    def return_object(self):
+        # go forward 20 cm then rotate and return to the designated trash area
+        self.move_rel(self.depth_threshold)
+
+        # Turn toward goal
+        curr_t, curr_r = self.listener.lookupTransform('odom', 'base_link', rospy.Time(0))
+        curr_yaw = tf.transformations.euler_from_quaternion(curr_r)[2]
+        print(curr_yaw)
+        diff = np.array([RETURN_LOCATION[0] - curr_t[0], RETURN_LOCATION[1] - curr_t[1]])
+        print(diff)
+        final_yaw = np.arctan2(diff[1], diff[0])
+        print(final_yaw)
+        angle = final_yaw - curr_yaw
+        print(angle)
+        self.rotate_rel(np.pi)
+        
+        # take object back to goal
+        distance_return = np.linalg.norm(diff)
+        self.move_rel(distance_return)
+
+        # reverse from object
+        self.move_rel(self.depth_threshold)
+        
+        # turn back random angle and explore
+        random_angle = (np.random.uniform(-np.pi, -np.pi/2., 1) if np.random.random() > 0.5 
+                        else np.random.uniform(np.pi/2., np.pi,))
+        self.rotate_rel(random_angle)
+        self._fsm = fsm.EXPLORING
 
     def spin(self):
         while not rospy.is_shutdown():
@@ -356,8 +410,9 @@ class Marker:
             elif self._fsm == fsm.EXPLORING:
                 self.random_walk()
             elif self._fsm == fsm.MARKING:
-                self.turn_around()
+                self.return_object()
             self.rate.sleep()
+
 
 def main():
     """Main function"""
