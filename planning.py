@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+# Main Contributors: Will Balkan and Paige Harris
+# With assistance from Kent Koehler and Jackson Desmond
+
 import numpy as np
 
 import rospy
