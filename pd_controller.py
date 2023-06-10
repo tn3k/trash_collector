@@ -3,6 +3,8 @@
 # Author: Kent Koehler
 # Date: 5/21/2023
 
+# Referenced PD controller seen in CS81
+
 class PD():
     """
     Simple PD class to separate control from node
