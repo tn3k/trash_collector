@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+# Main Contributors: Will Balkan and Paige Harris
+# With assistance from Kent Koehler and Jackson Desmond
+
 import numpy as np
 
 import rospy
@@ -12,14 +15,17 @@ import tf
 
 DEFAULT_CMD_VEL_TOPIC = 'cmd_vel'
 DEFAULT_SCAN_TOPIC = 'scan' # 'scan' for robot 'base_scan' for simulation
-DEFAULT_MAP_TOPIC = 'map'
-ROBOT_FRAME = "base_link" #"/base_link" for sim, "/base_laser_link" for real robot -- actually just base_link for both
+DEFAULT_MAP_TOPIC = '/map'
+ROBOT_FRAME = "/base_link" 
+LASER_FRAME = "laser" #'laser' for gazebo, 'base_link' should work for stage
 
 FRONT_ANGLE = 0
 LEFT_ANGLE = np.pi/4
 
-MIN_SCAN_ANGLE_RAD = -np.pi/4 # can this be negative?
-MAX_SCAN_ANGLE_RAD = np.pi/4
+# -pi/4 to pi/4 when laser isn't backwards (in sim)
+# -5pi/4 to -3pi/4 when laser is backwards (in gazebo)
+MIN_SCAN_ANGLE_RAD = -np.pi*5.0/4.0 
+MAX_SCAN_ANGLE_RAD = -np.pi*3.0/4.0
 
 FREQUENCY = 10
 
@@ -52,14 +58,15 @@ class Node:
         self.f = self.dist + h
         self.parent = parent
 
+# map class where an OccupancyGrid is created and filled out
 class Map:
     def __init__(self, width, height, resolution):
-        self.grid = (np.ones( height* width, dtype=np.uint8) * (-1)).tolist()
+        self.grid = np.ones( height* width ) * (-1)
 
         self.grid_msg = OccupancyGrid()
 
         self.grid_msg.header.stamp = rospy.get_rostime()
-        self.grid_msg.header.frame_id = 'odom'
+        self.grid_msg.header.frame_id = '/odom'
 
         self.grid_msg.data = self.grid
         self.grid_msg.info.resolution = resolution
@@ -68,14 +75,11 @@ class Map:
         self.grid_msg.info.origin.position.x = ORIGIN_X
         self.grid_msg.info.origin.position.y = ORIGIN_Y
 
-
+    # set a cell at (x, y) in the map to a given value
     def set_cell(self, x, y, val):
-        
         if y < 0 or y > self.grid_msg.info.height or x < 0 or x > self.grid_msg.info.width:
             return
-        # print("setting ", x, y, "to", val)
         index = (self.grid_msg.info.width*y) + x
-        # print('index', index)
         if self.grid_msg.data[index] == -1 or self.grid_msg.data[index] == EMPTY:
             self.grid_msg.data[index] = val
 
@@ -85,10 +89,12 @@ class Map:
         grid_y = int( (pos_y - self.grid_msg.info.origin.position.y) / RESOLUTION )
         return grid_x, grid_y
     
+    # return value of map cell at (x, y)
     def cell_at(self, x, y):
         index = int( (self.grid_msg.info.width*y) + x )
         return self.grid_msg.data[index]
     
+    # return a list of indices on the frontier for exploration
     def get_frontier(self):
         width = self.grid_msg.info.width
         frontier = []
@@ -112,7 +118,7 @@ class Map:
 
 
 
-
+# main node for exploration and mapping
 class Mapper:
     def __init__(self):
     
@@ -123,35 +129,18 @@ class Mapper:
         self._laser_sub = rospy.Subscriber(DEFAULT_SCAN_TOPIC, LaserScan, self.laser_callback, queue_size=1)
 
         # Setting up tf listener
-        self.tf = tf.TransformListener()
+        self.listener = tf.TransformListener()
 
         self.map = Map(WIDTH, HEIGHT, RESOLUTION)
 
         self._map_pub = rospy.Publisher(DEFAULT_MAP_TOPIC, OccupancyGrid, queue_size=1)
         self._map_pub.publish(self.map.grid_msg)
 
-        self.explore_sub = rospy.Subscriber("explore", Bool, self.explore_callback, queue_size=1)
-        self.collect_pub = rospy.Subscriber("collect", Bool, self.collect_callback, queue_size=1)
-
         self.updating = False
         self.laser_msg = None
 
-        self.trash_found = False
-
-        self.trash_map_x = None
-        self.trash_map_y = None
-
         self.trash_can_x = TRASH_CAN_X
         self.trash_can_y = TRASH_CAN_Y
-
-        self.collecting = False
-        self.exploring = True
-
-    def explore_callback(self, msg):
-        self.exploring = msg
-
-    def collect_callback(self, msg):
-        self.collecting = msg
 
 
 
@@ -203,30 +192,34 @@ class Mapper:
                 self.map.set_cell(obs_x + x, obs_y + y, OBSTACLE)
 
 
+    # store laser message
     def laser_callback(self, msg):
-
         self.laser_msg = msg
-        # if not self.updating:
-        #     self.update_map()
 
+
+    # using laser sensor data, update map with empty cells and obstacles
     def update_map(self):
         self.updating = True
 
+        # check for laser mesasge
         if self.laser_msg == None:
             self.updating = False
-            print('no message')
+            print('no laser message')
             return
 
         msg = self.laser_msg
 
-        pos, quat = self.get_Loc()
+        # get location of laser sensor
+        pos, quat = self.get_Laser_Loc()
         rob_x, rob_y = self.map.get_cell( pos[0], pos[1] )
         euler = tf.transformations.euler_from_quaternion(quat)
         yaw = euler[2]
 
+        # only map in a reduced range so that only areas that the camera can see are considered explored
         index_min = int((MIN_SCAN_ANGLE_RAD - msg.angle_min) / msg.angle_increment)
         index_max = int((MAX_SCAN_ANGLE_RAD - msg.angle_min) / msg.angle_increment)
 
+        # for angles within the range to be checked
         for i in range(index_min, index_max):
             if msg.ranges[i] > msg.range_max:
                 continue
@@ -243,11 +236,20 @@ class Mapper:
     # helper function to return the position and rotation of the robot with respect to the odom reference frame
     def get_Loc(self):
         frame = self.map.grid_msg.header.frame_id
-        self.tf.waitForTransform(frame, ROBOT_FRAME, rospy.Time(), rospy.Duration(4.0))
-        position, quaternion = self.tf.lookupTransform(frame, ROBOT_FRAME, rospy.Time(0))     
+        self.listener.waitForTransform(frame, ROBOT_FRAME, rospy.Time(), rospy.Duration(4.0))
+        position, quaternion = self.listener.lookupTransform(frame, ROBOT_FRAME, rospy.Time(0))     
+
+        return position, quaternion
+    
+    # get position of laser with respect to the odom reference frame
+    def get_Laser_Loc(self):
+        frame = self.map.grid_msg.header.frame_id
+        self.listener.waitForTransform(frame, LASER_FRAME, rospy.Time(), rospy.Duration(4.0))
+        position, quaternion = self.listener.lookupTransform(frame, LASER_FRAME, rospy.Time(0))     
 
         return position, quaternion
 
+    # get real world location of a map cell given its coordinates
     # input: cells, output: meters
     def m_from_cell(self, x, y):
         map_x = (x * self.map.grid_msg.info.resolution + self.map.grid_msg.info.origin.position.x)
@@ -294,6 +296,7 @@ class Mapper:
 
         time = abs(angle) / ANGULAR_VEL
 
+        # spin for calculated duration
         duration = rospy.Duration(time)
         start_time = rospy.get_rostime()
         while rospy.get_rostime() - start_time < duration:
@@ -314,7 +317,7 @@ class Mapper:
 
         self.rotate_rel(angle_diff)
 
-
+    # stop the robot's movement
     def stop(self):
         stop_msg = Twist()
         self._cmd_pub.publish(stop_msg)
@@ -325,8 +328,8 @@ class Mapper:
         frontier = []
         visited = []
         h = np.sqrt((goal[0] - start[0])**2 + (goal[1] - start[1])**2)
-        # h = int(h)
         frontier.append(Node(start, 0, h, None))
+        
         while len(frontier) > 0:
             min_f_index = 0
             for i in range(len(frontier)):
@@ -348,7 +351,7 @@ class Mapper:
                     
                     return rev_path
 
-                # check all neighboring points
+                # search all neighboring points
                 for dx in [-1, 0, 1]:
                     for dy in [-1, 0, 1]:
                         if dx != 0 or dy != 0:
@@ -359,8 +362,6 @@ class Mapper:
                                 step = np.sqrt(dx*dx + dy*dy)
                                 new_child = Node(point, curr.dist + step, h, curr)
                                 clear = True
-                                # for dx2 in range(-5, 6):
-                                #     for dy2 in range(-5,6):
                                 if self.map.cell_at(point[0], point[1]) != 0:
                                     clear = False
                                 if clear:
@@ -376,6 +377,8 @@ class Mapper:
         print('didnt find')
         return None
     
+
+    # given a path through the occupancy grid, convert to a path in real world coordinates
     def path_to_map(self, path):
         map_path = []
         if path != None:
@@ -383,9 +386,9 @@ class Mapper:
                 map_path.append( self.m_from_cell(path[i].point[0], path[i].point[1]) )
         return map_path
     
-    # draw a polygon connecting a series of points
-    def polyline(self, points, explore):
 
+    # move along a line connecting a series of points
+    def polyline(self, points):
         # rotate toward and move to each point in the list
         for i in range(len(points)):
             position, quaternion = self.get_Loc()
@@ -414,13 +417,17 @@ class Mapper:
 
             self.translate(dist)
             self.update_map()
-            if self.exploring != explore:
-                return
+            
     
-
+    # main function for exploring the environment, consists of:
+    # 1: getting a random location on the frontier
+    # 2: finding a path to this location
+    # 3: moving the robot along this path to the new location on the frontier
     def explore(self):
         self.update_map()
         frontier = self.map.get_frontier()
+
+        # get a random location on the frontier
         if len(frontier) == 0:
             rospy.sleep(2)
             print('no frontier')
@@ -429,46 +436,31 @@ class Mapper:
         target_x = frontier[random_cell] % self.map.grid_msg.info.width
         target_y = (frontier[random_cell] - target_x) / self.map.grid_msg.info.width
 
+        # find a path to the frontier location
         pos, _ = self.get_Loc()
         print(self.map.get_cell(pos[0], pos[1]), [target_x, target_y])
         path = self.find_path(self.map.get_cell(pos[0], pos[1]), [target_x, target_y])
         map_path = self.path_to_map(path)
         print(path)
         print(map_path)
-        self.polyline(map_path, True)
+
+        # move to the frontier
+        self.polyline(map_path)
         rospy.sleep(2)
 
 
 def main():
     rospy.init_node("mapper")
-
     robot = Mapper()
-
     rospy.sleep(2)
 
+    # stop robot movement on shutdown
     rospy.on_shutdown(robot.stop)
 
+    # robot explores environment
     while not rospy.is_shutdown():
-        if robot.exploring:
-            robot.explore()
+        robot.explore()
 
-            
-        elif robot.collecting:
-
-            # pos, _ = robot.get_Loc()
-            # path = robot.find_path( robot.map.get_cell( pos.x, pos.y ), robot.map.get_cell( robot.trash_map_x, robot.trash_map_y ) )
-            # map_path = robot.path_to_map(path)
-            # robot.polyline(map_path)
-
-            # rospy.sleep(2)
-
-            pos, _ = robot.get_Loc()
-            path = robot.find_path( robot.map.get_cell( pos.x, pos.y ), robot.map.get_cell( robot.trash_can_x, robot.trash_can_y ) )
-            map_path = robot.path_to_map(path)
-            robot.polyline(map_path, False)
-            robot.translate(-0.3)
-            robot.collecting = False
-            robot.exploring = True
 
     rospy.spin()
 
