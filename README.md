@@ -1,38 +1,20 @@
 # Trash Collector Robot
 
-### Launching the simulator
+Jack Desmond, Paige Harris, Will Balkan, and Kent Koehler
+Dartmouth College, COSC 81, Spring 2023
 
-To launch the simulator, first download the required ROSBOT packages from github
+### Description
 
-```bash
-cd {workspace}/src
-git clone -b noetic https://github.com/husarion/rosbot_ros.git
-```
+#### Primary Code
 
-Install dependencies:
+`marker.py` is the program tested in simulation for which the data in the report is representative of. The program implements color-based object detection and visual servoing with a PD controller as well as object localization based on image data.
 
-```bash
-cd {workspace}
-rosdep install --from-paths src --ignore-src -r -y
-```
+#### Secondary Code
 
-Build workspace:
+`planning.py` implements autonomous frontier-based exploration and mapping as well as an A* pathfinding algorithm.
 
-```bash
-cd {workspace}
-catkin_make
-```
+`cleanup.py` is a theoretical combination of `marker.py` with the real ROSbot 2 that would collect the object in a containment device and return it to the origin.
 
-Load system variables:
+### Simulation
 
-```bash
-source {workspace}/devel/setup.sh
-```
-
-Launch the simulation
-
-```bash
-cd {workspace}/src/trash_collector/launch
-export GAZEBO_RESOURCE_PATH={workspace}/src/trash_collector/world
-rosluanch green_boxes.launch
-```
+In the directions `/world` and `/launch` are world files and launch files that were developed for the project and used in simulation testing. The launch files require packages for simulating the ROSbot 2 which can be found [here](https://github.com/husarion/rosbot_ros). Running the launch files requires setting `GAZEBO_RESOURCE_PATH`.
