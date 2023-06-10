@@ -1,7 +1,10 @@
 #!/usr/env/bin python
 
 # Author: Kent Koehler and Jack Desmond
+# With assistance from Paige Harris and Will Balkan
 # Date: 5/21/2023
+
+# Referenced color detection algorithm from CS10
 
 import numpy as np
 import tf
@@ -42,7 +45,7 @@ CAMERA_DEPTH_TOPIC = 'camera/depth/image_raw'
 
 # parameters for object detection
 MAX_COLOR_DIFF = 50
-MIN_REGION_SIZE = 5
+MIN_REGION_SIZE = 10
 
 OBJECT_COLOR = (0, 100, 0)
 
@@ -118,7 +121,9 @@ class Marker:
 ################################################################################
 
     def _image_callback(self, msg):
-        """Finds the regions of matching color"""
+        """
+        Finds the regions of matching color on image
+        """
         # Initialize
         visited = set()
         regions = []
@@ -156,6 +161,9 @@ class Marker:
         self.regions = regions
 
     def _depth_callback(self, msg):
+        """
+        Callback function for the depth image.
+        """
         raw_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
         image = cv.pyrDown(cv.pyrDown(raw_image))
         self.depth_image = image
@@ -203,22 +211,17 @@ class Marker:
                 odom_p = o_H_c.dot(np.transpose(cam_p))
                 # if position not close to collection site
                 difference = np.array([odom_p[1] - RETURN_LOCATION[1], odom_p[0], RETURN_LOCATION[0]])
-                # if the region is outside of the collection site
-                if np.linalg.norm(difference) > self.marker_threshold:
+                new = True
+                for marker in self.marked:
+                    # find difference from marker
+                    difference = np.array([odom_p[1] - marker[1], odom_p[0] - marker[0]])
+                    # if that difference is less than the threshold then it is not new
+                    if np.linalg.norm(difference) < self.marker_threshold:
+                        new = False
+                        break
+                # if this is a new point then return the region
+                if new:
                     return region
-################# FOR MARKING THE OBJECTS ######################################
-                # new = True
-                # for marker in self.marked:
-                #     # find difference from marker
-                #     difference = np.array([odom_p[1] - marker[1], odom_p[0] - marker[0]])
-                #     # if that difference is less than the threshold then it is not new
-                #     if np.linalg.norm(difference) < self.marker_threshold:
-                #         new = False
-                #         break
-                # # if this is a new point then return the region
-                # if new:
-                #     return region
-################################################################################
             # if none of the regions are new 
         return None
 
@@ -328,6 +331,9 @@ class Marker:
         self.marked.append(odom_p[0:2])
 
     def update_state(self):
+        """
+        Update the current state of the robot with new object and error
+        """
         self.object = self.get_object()
         self.error = self.calculate_pixel_error()
         if self._fsm == fsm.EXPLORING and not np.isnan(self.error):
@@ -344,7 +350,7 @@ class Marker:
                 if self.depth < self.depth_threshold:
                     self.stop()
                     self._fsm = fsm.MARKING
-                    # self.mark_object(self.depth)          # for marking the objects in the map
+                    self.mark_object(self.depth)
                 else:
                     self.calculate_controller_error(self.error)
 
@@ -361,46 +367,14 @@ class Marker:
 
     def rotate_rel(self, angle):
         duration = abs(angle) / self.max_angular_velocity
-        print(duration)
         direction = np.sign(angle)
-        print(direction)
         start_time = rospy.get_rostime()
         while not rospy.is_shutdown():
-            print(rospy.get_rostime())
             self.move(0, direction * self.max_angular_velocity)
             if rospy.get_rostime() - start_time >= rospy.Duration(duration):
                 self.stop()
                 break
             self.rate.sleep()
-
-    def return_object(self):
-        # go forward 20 cm then rotate and return to the designated trash area
-        self.move_rel(self.depth_threshold)
-
-        # Turn toward goal
-        curr_t, curr_r = self.listener.lookupTransform('odom', 'base_link', rospy.Time(0))
-        curr_yaw = tf.transformations.euler_from_quaternion(curr_r)[2]
-        print(curr_yaw)
-        diff = np.array([RETURN_LOCATION[0] - curr_t[0], RETURN_LOCATION[1] - curr_t[1]])
-        print(diff)
-        final_yaw = np.arctan2(diff[1], diff[0])
-        print(final_yaw)
-        angle = final_yaw - curr_yaw
-        print(angle)
-        self.rotate_rel(np.pi)
-        
-        # take object back to goal
-        distance_return = np.linalg.norm(diff)
-        self.move_rel(distance_return)
-
-        # reverse from object
-        self.move_rel(self.depth_threshold)
-        
-        # turn back random angle and explore
-        random_angle = (np.random.uniform(-np.pi, -np.pi/2., 1) if np.random.random() > 0.5 
-                        else np.random.uniform(np.pi/2., np.pi,))
-        self.rotate_rel(random_angle)
-        self._fsm = fsm.EXPLORING
 
     def spin(self):
         while not rospy.is_shutdown():
@@ -410,7 +384,11 @@ class Marker:
             elif self._fsm == fsm.EXPLORING:
                 self.random_walk()
             elif self._fsm == fsm.MARKING:
-                self.return_object()
+                # rotate random angle and continue to explore
+                raw_angle = np.random.uniform(3 * np.pi / 4, np.pi)
+                angle = -raw_angle if np.random.random() < 0.5 else raw_angle
+                self.rotate_rel(angle)
+                self._fsm = fsm.EXPLORING
             self.rate.sleep()
 
 
