@@ -176,12 +176,13 @@ class VisualServo:
 
     def spin(self):
         while not rospy.is_shutdown():
-            if self._fsm == fsm.FOLLOWING:
-                self.move(self.linear_velocity, self.angular_velocity)
-            elif self._fsm == fsm.EXPLORING:
-                self.random_walk()
-            elif self._fsm == fsm.MARKING:
-                self.mark_object()
+            self.move(self.linear_velocity, self.angular_velocity)
+            # if self._fsm == fsm.FOLLOWING:
+            #     self.move(self.linear_velocity, self.angular_velocity)
+            # elif self._fsm == fsm.EXPLORING:
+            #     self.random_walk()
+            # elif self._fsm == fsm.MARKING:
+            #     self.mark_object()
             self.rate.sleep()
 
 def main():
